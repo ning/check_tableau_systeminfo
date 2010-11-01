@@ -1,0 +1,23 @@
+Nagios plugin for Tableau servers through /admin/systeminfo
+
+LICENSE
+ + see LICENSE for licensing details
+
+REQUIREMENTS:
+ + xml-simple (Ruby gem)
+ + you must whitelist the Nagios servers in the Tableau server
+
+USAGE:
+ + check_tableau_systeinfo [-v] -H <hostname>|-f <file.xml>
+   - <hostname>: the Tableau server to check
+   - <file.xml>: an XML file containing Tableau status (useful for testing)
+   - "-v" is for verbose
+   - "-H" and "-f" are mutually exclussive
+
+CONFIGURARTION
+ + Apologies, configuration is currently hard-coded in the script; edit
+   busy_thres for number of Busy workers to issue a warning; any worker
+   marked as down generates a critical alert.
+
+SOURCE:
+ + http://github.com/ning/check_tableau_systeminfo
