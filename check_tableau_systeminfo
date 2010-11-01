@@ -1,0 +1,146 @@
+#!/usr/local/bin/ruby
+
+#       Usage: check_tableau_systeminfo -H <hostname>|-f [<file.xml>]
+# Description: check_tableau_systeminfo parses Tableau's systeminfo and reports Nagios status
+#              for Tableau server (http://www.tableausoftware.com/products/server)
+#              + CRITICAL: any service instance that is DOWN 
+#              +  WARNING: too many BUSY instances (per busy_thres)
+#      Author: gerir_at_ning_dot_com
+
+   require 'rubygems'
+   require 'optparse'
+   require 'net/http'
+   require 'uri'
+   require 'xmlsimple'
+   
+   # busy thresholds
+   # generates warning if n busy serviceinstances for service
+   busy_thres = { 'W' => { 'serverwebapplication' => 12, 'vizqlserver' => 6 } }
+
+   # global indeed; apologies
+   $ns = { 'O' => { 'f' => nil, 'm' => 'systeminfo OK', 'e' => 0, 's' => 'OK'       },
+           'W' => { 'f' => nil, 'm' => ''             , 'e' => 1, 's' => 'WARNING'  },
+           'C' => { 'f' => nil, 'm' => ''             , 'e' => 2, 's' => 'CRITICAL' },
+           'U' => { 'f' => nil, 'm' => ''             , 'e' => 3, 's' => 'UNKNOWN'  }
+         }
+   
+   # plugin output and exit code
+   def nagiosMessageExit(status,message=nil)
+      unless message
+         message = $ns[status]['m']
+      end
+      message.strip!
+      puts "#{$ns[status]['s']}: #{message}"
+      exit $ns[status]['e']
+   end
+
+
+# argument/options parsing and sanity checks
+   begin
+      options = {}
+   
+      optparse = OptionParser.new do |opts|
+         opts.banner = "usage: check_tableau_systeminfo -H <hostname>|-f <file.xml>"
+  
+         options[:hostname] = nil
+         opts.on( '-H', '--hostname HOSTNAME', 'Hostname' ) do |hostname|
+            options[:hostname] = hostname
+         end
+         
+         options[:filename] = nil
+         opts.on( '-f', '--filename FILENAME', 'Filename' ) do |filename|
+            options[:filename] = filename
+         end
+         
+         options[:verbose] = nil
+         opts.on( '-v', '--verbose', 'Verbose' ) do
+            options[:verbose] = true
+         end
+   
+         opts.on( '-h', '--help', 'Help' ) do
+            puts opts
+            exit
+         end
+      end
+ 
+      optparse.parse!
+      
+      unless (options[:hostname] or options[:filename])
+         nagiosMessageExit('U', "unable to parse arguments (none provided)")
+      end
+
+      if options[:hostname] and options[:filename]
+         nagiosMessageExit('U', "--hostname and --filename are mutually exclusive options")
+      end
+      
+   rescue OptionParser::InvalidOption
+      nagiosMessageExit('U', "error parsing options: #{$!}")
+      
+   rescue RuntimeError
+      nagiosMessageExit('U', "#{$!}")
+      
+   end
+
+# fetch systeminfo
+ # filename (useful for debugging)
+   if options[:filename]
+      if options[:verbose] : puts "reading file #{options[:filename]}" end
+      begin    
+         systeminfo = XmlSimple.xml_in(options[:filename], { 'KeyAttr' => 'name' })
+      rescue ArgumentError
+         nagiosMessageExit('U', "#{$!}")
+      end
+ # hostname
+   elsif options[:hostname]
+      if options[:verbose] : puts "contacting host #{options[:hostname]}" end
+      begin
+         url = URI.parse("http://#{options[:hostname]}/admin/systeminfo")
+         req = Net::HTTP::Get.new(url.path)
+         res = Net::HTTP.start(url.host, url.port) {|http|
+            http.request(req)
+         }
+         if options[:verbose] : puts "parsing systeminfo\n#{res.body}" end
+         systeminfo = XmlSimple.xml_in(res.body, { 'KeyAttr' => 'name' })
+      rescue Errno::ECONNREFUSED
+         nagiosMessageExit('C', "#{$!}")
+      rescue REXML::ParseException
+         nagiosMessageExit('U', "unable to parse systeminfo")
+      rescue
+         nagiosMessageExit('U', "#{$!}")
+      end
+   end
+
+# analyze systeminfo   
+   if systeminfo["machines"]
+      systeminfo["machines"][0]["machine"]["Primary"].each do |service|
+         busy_c = 0
+         service[1].each do |serviceinstance|
+            if (serviceinstance["status"].casecmp "down") == 0
+               $ns['C']['m'] += "#{service[0]} #{serviceinstance["worker"]} is DOWN! "
+               $ns['C']['f'] = true
+               break
+            elsif (serviceinstance["status"].casecmp "busy") == 0
+               busy_c += 1
+            end
+         end
+         break if $ns['C']['f']
+      
+         if busy_thres['W'][service[0]]
+            if busy_c >= busy_thres['W'][service[0]]
+               $ns['W']['f'] = true
+               $ns['W']['m'] += "#{service[0]} has more than #{busy_c} instances in BUSY state "
+            end
+         end
+      end
+   else
+      nagiosMessageExit('U', "unable to parse systeminfo")
+   end
+
+# report status   
+   if $ns['C']['f']
+      nagiosMessageExit('C')
+   elsif $ns['W']['f']
+      nagiosMessageExit('W')
+   else
+      nagiosMessageExit('O')
+   end
