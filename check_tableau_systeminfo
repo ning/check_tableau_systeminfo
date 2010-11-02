@@ -1,4 +1,4 @@
-#!/usr/local/bin/ruby
+#!/usr/bin/env ruby -w
 
 #       Usage: check_tableau_systeminfo -H <hostname>|-f [<file.xml>]
 # Description: check_tableau_systeminfo parses Tableau's systeminfo and reports Nagios status
@@ -26,9 +26,7 @@
    
    # plugin output and exit code
    def nagiosMessageExit(status,message=nil)
-      unless message
-         message = $ns[status]['m']
-      end
+      unless message : message = $ns[status]['m'] end
       message.strip!
       puts "#{$ns[status]['s']}: #{message}"
       exit $ns[status]['e']
