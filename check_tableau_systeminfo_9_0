@@ -1,4 +1,4 @@
-#!/usr/bin/ruby -w
+#!/usr/bin/env ruby
 
 #       Usage: check_tableau_systeminfo -H <hostname>|-f [<file.xml>]
 # Description: check_tableau_systeminfo parses Tableau's systeminfo and reports Nagios status
@@ -23,11 +23,10 @@
            'C' => { 'f' => nil, 'm' => ''             , 'e' => 2, 's' => 'CRITICAL' },
            'U' => { 'f' => nil, 'm' => ''             , 'e' => 3, 's' => 'UNKNOWN'  }
          }
-   $host = ''
 
    # plugin output and exit code
    def nagiosMessageExit(status,message=nil)
-      message = $ns[status]['m'] unless message
+      unless message : message = $ns[status]['m'] end
       message.strip!
       puts "#{$ns[status]['s']}: #{message}"
       exit $ns[status]['e']
@@ -39,18 +38,16 @@
       options = {}
 
       optparse = OptionParser.new do |opts|
-         opts.banner = "usage: check_tableau_systeminfo -H <hostname>|-f <file.xml>|-S <systemname>"
+         opts.banner = "usage: check_tableau_systeminfo -H <hostname>|-f <file.xml>"
 
          options[:hostname] = nil
          opts.on( '-H', '--hostname HOSTNAME', 'Hostname' ) do |hostname|
             options[:hostname] = hostname
-            $host = /([^.]+)\..*/.match(hostname)
-	 end
+         end
 
          options[:filename] = nil
          opts.on( '-f', '--filename FILENAME', 'Filename' ) do |filename|
             options[:filename] = filename
-	    $host = /([^.]+)\..*/.match(filename)
          end
 
          options[:verbose] = nil
@@ -85,27 +82,23 @@
 # fetch systeminfo
  # filename (useful for debugging)
    if options[:filename]
-      puts "reading file #{options[:filename]}" if options[:verbose]
+      if options[:verbose] : puts "reading file #{options[:filename]}" end
       begin
-	 puts "#{$host[1]}" if options[:verbose]
          systeminfo = XmlSimple.xml_in(options[:filename], { 'KeyAttr' => 'name' })
       rescue ArgumentError
          nagiosMessageExit('U', "#{$!}")
       end
  # hostname
    elsif options[:hostname]
-      puts "contacting host #{options[:hostname]}" if options[:verbose]
-#      host = /([^.]+)\..*/.match(#{options[:hostname]})
+      if options[:verbose] : puts "contacting host #{options[:hostname]}" end
       begin
          url = URI.parse("http://#{options[:hostname]}/admin/systeminfo.xml")
          req = Net::HTTP::Get.new(url.path)
          res = Net::HTTP.start(url.host, url.port) {|http|
             http.request(req)
          }
-         puts "parsing systeminfo\n#{res.body}" if options[:verbose]
+         if options[:verbose] : puts "parsing systeminfo\n#{res.body}" end
          systeminfo = XmlSimple.xml_in(res.body, { 'KeyAttr' => 'name' })
-      rescue Timeout::Error
-         nagiosMessageExit('C', "#{$!}")
       rescue Errno::ECONNREFUSED
          nagiosMessageExit('C', "#{$!}")
       rescue REXML::ParseException
@@ -114,42 +107,28 @@
          nagiosMessageExit('U', "#{$!}")
       end
    end
-
-#      systeminfo["machines"][0]["machine"]["Primary"].each do |service|
-# analyze systeminfo
-   if systeminfo["machines"]
-      systeminfo["machines"][0]["machine"]["#{$host[1]}"].each do |service|
-         busy_c = 0
-         service[1].each do |serviceinstance|
-	    puts "service #{service[0]} #{serviceinstance["status"]}" if options[:verbose]
-            if (service[0] == "filestore")
-              if (serviceinstance["failedTransfers"].to_i >0)
-                $ns['C']['m'] += "filestore failedTransfers >0 "
-                $ns['C']['f'] = true
-              end
+#parse XML
+    begin
+        sysinfo = systeminfo["machines"][0]["machine"]
+        serinfo = systeminfo["service"]
+        for system in sysinfo.keys()
+            for app in sysinfo[system].keys()
+                for status in sysinfo[system][app]
+                    if status.keys().include?("status")
+                        if not (status["status"] == "Active" or status["status"]  == "Standby")
+                            nagiosMessageExit('C',"Non OK or Standby status in: #{system}:#{app}:#{status}")
+                        end
+                    end
+                end
             end
-            if (serviceinstance["status"].casecmp("Active") < 0)
-              if (serviceinstance["status"].casecmp("busy")) == 0
-                busy_c += 1
-              else
-                $ns['C']['m'] += "#{service[0]} is DOWN! "
-                $ns['C']['f'] = true
-                break
-              end
-            end
-         end
-         break if $ns['C']['f']
-
-         if busy_thres['W'][service[0]]
-            if busy_c >= busy_thres['W'][service[0]]
-               $ns['W']['f'] = true
-               $ns['W']['m'] += "#{service[0]} has more than #{busy_c} instances in BUSY state "
-            end
-         end
-      end
-   else
-      nagiosMessageExit('U', "unable to parse systeminfo")
-   end
+        end
+    rescue
+        nagiosMessageExit('C', "Error parsing tableau state.  systeminfo is: #{systeminfo}")
+    end
+    # parse service
+    if not serinfo[0]["status"] == "Active"
+        nagiosMessageExit('C',"Service status not Active: #{serinfo[0]["status"]}")
+    end
 
 # report status
    if $ns['C']['f']
